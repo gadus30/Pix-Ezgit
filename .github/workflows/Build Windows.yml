@@ -26,8 +26,9 @@ jobs:
       - name: 编译Windows正式版
         run: flutter build windows --release
 
+      # 修正路径，加上 runtime
       - name: 压缩成品
-        run: Compress-Archive build/windows/x64/release PixEz_Windows成品.zip
+        run: Compress-Archive build/windows/x64/runtime/release PixEz_Windows成品.zip
 
       - name: 上传下载包
         uses: actions/upload-artifact@v4
