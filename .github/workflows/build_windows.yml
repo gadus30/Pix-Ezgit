@@ -1,41 +1,205 @@
-name: Flutter Windows Release打包
+name: Build Windows
 on:
   push:
     branches: [ master ]
+  pull_request:
+    branches: [ master ]
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: '仅支持 master 分支打包'
+        default: master
+        type: choice
+        options:
+          - master
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: ./
+  build:
+    name: Build Windows
+    runs-on: windows-2022
+    outputs:
+      binary-artifact: ${{ steps.binary-artifact.outputs.artifact-url }}
+      msix-conclusion: ${{ steps.msix.conclusion }}
+      installer-conclusion: ${{ steps.installer.conclusion }}
     steps:
-      - name: 拉取项目源码
-        uses: actions/checkout@v4
+      - name: 签出仓库代码
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.target_branch || github.ref }}
 
-      - name: 配置Flutter环境
+      - name: 初始化 GitVersion
+        uses: gittools/actions/gitversion/setup@v4
+        with:
+          versionSpec: '6.7.x'
+
+      - name: 计算版本 Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v4
+        with:
+          overrideConfig: |
+            assembly-versioning-scheme=MajorMinorPatchTag
+            assembly-file-versioning-format="{Major}.{Minor}.{Patch}.{BuildMetaData ?? 0}"
+            branches:
+              master:
+                mode: ContinuousDelivery
+                label: ''
+                increment: Patch
+            fallback-tag: v0.0.1
+
+      - name: 初始化 Flutter 环境(FVM)
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.4'
+          flutter-version-file: .fvmrc
           cache: true
 
-      - name: 关闭Flutter统计上报
-        run: flutter config --no-analytics
+      - name: Flutter 预缓存Windows编译资源
+        run: flutter precache --windows
 
-      - name: 安装项目依赖
-        run: flutter pub get
+      - name: 初始化 Rust 工具链
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: 编译Windows正式安装包
-        run: flutter build windows --release
+      - name: 还原项目依赖
+        run: flutter pub get --no-example --enforce-lockfile
 
-      - name: 压缩打包产物
-        run: |
-          choco install 7zip -y --no-progress
-          7z a Windows-release.zip ./build/windows/x64/runner/Release/*
+      - name: 生成代码 (rhttp)
+        working-directory: plugins/rhttp/rhttp
+        run: dart run build_runner build
 
-      - name: 上传压缩包
-        uses: actions/upload-artifact@v4
+      - name: 生成代码 (PixEz)
+        run: dart run build_runner build
+
+      - name: 构建Windows Release安装包
+        shell: pwsh
+        run: |-
+          flutter build windows `
+            --release `
+            --no-pub `
+            --build-name=${{ steps.gitversion.outputs.majorMinorPatch }} `
+            --build-number=${{ steps.gitversion.outputs.buildMetaData }}
+
+      - name: 上传原始二进制产物
+        id: binary-artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: Windows安装包
-          path: Windows-release.zip
+          name: windows-x86_64-release
+          path: build/windows/x64/runner/Release/**/*
+          compression-level: 9
+
+      - name: 还原签名证书
+        id: restore-cert
+        shell: pwsh
+        if: env.CERTIFICATE != '' && github.event_name != 'pull_request'
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |-
+          $certFile = (New-TemporaryFile).FullName + '.pfx'
+          [System.IO.File]::WriteAllBytes($certFile, [System.Convert]::FromBase64String($env:CERTIFICATE))
+          $Private:Password = ConvertTo-SecureString -String $env:CERTIFICATE_PASSWORD -AsPlainText
+          $Private:Certificate = Get-PfxCertificate $certFile -Password $Private:Password
+          $Private:Certificate.Subject
+          Write-Output "CERTIFICATE_PATH=$certFile" >> "$env:GITHUB_OUTPUT"
+          Write-Output "CERTIFICATE_SUBJECT=$($Private:Certificate.Subject)" >> "$env:GITHUB_OUTPUT"
+
+      - name: 打包MSIX安装包
+        id: msix
+        shell: pwsh
+        if: steps.restore-cert.conclusion == 'success'
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |-
+          dart run msix:create `
+            --certificate-path '${{ steps.restore-cert.outputs.CERTIFICATE_PATH }}' `
+            --certificate-password $env:CERTIFICATE_PASSWORD `
+            --build-windows false `
+            --version '${{ steps.gitversion.outputs.assemblySemVer }}' `
+            --publisher '${{ steps.restore-cert.outputs.CERTIFICATE_SUBJECT }}'
+          Move-Item `
+            -LiteralPath build/windows/x64/runner/Release/pixez.msix `
+            -Destination build/windows/x64/runner/Release/windows-x86_64-release.msix
+
+      - name: 上传MSIX包
+        id: msix-artifact
+        if: steps.msix.conclusion == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64-release.msix
+          path: build/windows/x64/runner/Release/windows-x86_64-release.msix
+          compression-level: 9
+
+      - name: 生成MSIX一键安装器exe
+        id: installer
+        if: steps.msix.conclusion == 'success'
+        uses: frg2089/MsixInstaller@v2
+        with:
+          msix: build/windows/x64/runner/Release/windows-x86_64-release.msix
+          name: windows-x86_64-release.msix
+
+      - name: 上传MSIX安装器exe
+        id: installer-artifact
+        if: steps.installer.conclusion == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64-release.msix.exe
+          path: ${{ steps.installer.outputs.path }}
+          compression-level: 9
+
+      - name: 生成构建摘要与校验和
+        shell: pwsh
+        run: |-
+          Write-Output '### Build Success :rocket:' >> $env:GITHUB_STEP_SUMMARY
+          if ($env:CERTIFICATE_SUBJECT) {
+            Write-Output "Publisher: $env:CERTIFICATE_SUBJECT" >> $env:GITHUB_STEP_SUMMARY
+          }
+          Write-Output '|File|SHA256|' >> $env:GITHUB_STEP_SUMMARY
+          Write-Output '|:-|:-:|' >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "|[binary](${{ steps.binary-artifact.outputs.artifact-url }})|${{ steps.binary-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY
+          if ('${{ steps.msix-artifact.conclusion }}' -eq 'success') {
+            Write-Output "|[msix](${{ steps.msix-artifact.outputs.artifact-url }})|${{ steps.msix-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY
+          }
+          if ('${{ steps.installer-artifact.conclusion }}' -eq 'success') {
+            Write-Output "|[installer](${{ steps.installer-artifact.outputs.artifact-url }})|${{ steps.installer-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY
+          }
+          Write-Output '' >> $env:GITHUB_STEP_SUMMARY
+          Write-Output '### MSIX 安装教程' >> $env:GITHUB_STEP_SUMMARY
+          Write-Output '' >> $env:GITHUB_STEP_SUMMARY
+
+  publish:
+    needs: build
+    name: 发布Release
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+      discussions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: 签出仓库
+        uses: actions/checkout@v7
+
+      - name: 下载原始二进制产物
+        if: needs.build.outputs.msix-conclusion == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-x86_64-release
+          path: artifacts
+          skip-decompress: true
+
+      - name: 下载MSIX包
+        if: needs.build.outputs.msix-conclusion == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-x86_64-release.msix
+          path: artifacts
+
+      - name: 下载MSIX一键安装器
+        if: needs.build.outputs.installer-conclusion == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-x86_64-release.msix.exe
+          path: artifacts
+
+      - name: 创建GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/*
