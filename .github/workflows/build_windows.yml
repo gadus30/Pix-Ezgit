@@ -10,7 +10,11 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装Flutter固定版本
+      # 重点！这里把 pixez 改成你的 Flutter 项目文件夹名字
+      - name: 进入项目文件夹
+        run: cd pixez
+
+      - name: 安装Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.0"
@@ -19,14 +23,14 @@ jobs:
       - name: 开启Windows桌面编译
         run: flutter config --enable-windows-desktop
 
-      - name: 拉取项目依赖
+      - name: 下载依赖
         run: flutter pub get
 
-      - name: 打包Windows Release
+      - name: 打包Windows安装包
         run: flutter build windows --release
 
-      - name: 上传打包成品
+      - name: 上传打包文件
         uses: actions/upload-artifact@v4
         with:
           name: Windows安装包
-          path: build/windows/x64/runner/Release
+          path: pixez/build/windows/x64/runner/Release
