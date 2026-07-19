@@ -1,41 +1,48 @@
-name: Windows Build
+name: Flutter Windows打包
 
-# 触发条件：推送代码到master分支、手动触发工作流
 on:
   push:
     branches: [ master ]
-  workflow_dispatch:
+  workflow_dispatch: # 支持手动点运行
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ./ # 指定项目根目录，解决报错
     steps:
-      # 拉取仓库源码
-      - name: Checkout source code
+      # 1.拉取代码
+      - name: 拉取源码
         uses: actions/checkout@v4
 
-      # 配置系统环境（按需替换你的项目依赖）
-      - name: Setup build environment
-        run: |
-          echo "配置编译依赖环境"
-          choco install 7zip --no-progress
+      # 2.配置Flutter环境
+      - name: 安装Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0' # 改成你自己的flutter版本
 
-      # 编译项目，替换为你自己的编译命令
-      - name: Build project
-        run: |
-          mkdir build
-          cd build
-          cmake ..
-          cmake --build . --config Release
+      # 3.关闭分析统计（避免多余弹窗输出）
+      - name: 关闭Flutter Analytics
+        run: flutter config --no-analytics
 
-      # 打包编译输出文件
-      - name: Package release files
-        run: |
-          7z a release-windows.zip ./build/Release/*
+      # 4.安装依赖（你报错的这一步）
+      - name: 安装项目依赖
+        run: flutter pub get
 
-      # 上传打包产物到工作流
-      - name: Upload artifact
+      # 5.编译Windows Release安装包
+      - name: 编译Windows Release
+        run: flutter build windows --release
+
+      # 6.压缩打包产物
+      - name: 压缩安装包
+        run: |
+          choco install 7zip -y --no-progress
+          7z a Flutter-Windows-release.zip ./build/windows/x64/runner/Release/*
+
+      # 7.上传成品文件
+      - name: 上传打包文件
         uses: actions/upload-artifact@v4
         with:
           name: Windows安装包
-          path: release-windows.zip
+          path: Flutter-Windows-release.zip
