@@ -1,4 +1,4 @@
-name: PixEz Windows自动打包
+name: PixEz Windows打包
 on:
   workflow_dispatch:
   push:
@@ -8,28 +8,29 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: 拉取仓库源码
+      - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 配置Flutter稳定版本
+      - name: 配置Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
 
-      - name: 云端自动安装C++编译工具
-        run: choco install visualstudio2022-buildtools visualstudio2022-workload-vctools -y
+      # Windows-latest 自带完整VS2022+C++工具，无需choco手动安装
+      - name: 验证VS编译环境
+        run: flutter doctor -v
 
-      - name: 安装项目依赖包
+      - name: 拉取依赖
         run: flutter pub get
 
-      - name: 编译Windows正式版程序
+      - name: 编译Windows正式包
         run: flutter build windows --release
 
-      - name: 打包成品为压缩包
-        run: Compress-Archive build/windows/x64/release PixEz_Windows.zip
+      - name: 压缩成品
+        run: Compress-Archive build/windows/x64/release PixEz_Win成品.zip
 
-      - name: 上传打包文件（可下载）
+      - name: 上传下载包
         uses: actions/upload-artifact@v4
         with:
-          name: PixEz-Windows客户端
-          path: PixEz_Windows.zip
+          name: Windows客户端压缩包
+          path: PixEz_Win成品.zip
