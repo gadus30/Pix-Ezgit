@@ -1,17 +1,9 @@
 name: Build Windows
+
 on:
   push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
+  pull_request: 
   workflow_dispatch:
-    inputs:
-      target_branch:
-        description: '仅支持 master 分支打包'
-        default: master
-        type: choice
-        options:
-          - master
 
 jobs:
   build:
@@ -22,11 +14,10 @@ jobs:
       msix-conclusion: ${{ steps.msix.conclusion }}
       installer-conclusion: ${{ steps.installer.conclusion }}
     steps:
-      - name: 签出仓库代码
+      - name: 签出仓库
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.target_branch || github.ref }}
 
       - name: 初始化 GitVersion
         uses: gittools/actions/gitversion/setup@v4
@@ -40,26 +31,17 @@ jobs:
           overrideConfig: |
             assembly-versioning-scheme=MajorMinorPatchTag
             assembly-file-versioning-format="{Major}.{Minor}.{Patch}.{BuildMetaData ?? 0}"
-            branches:
-              master:
-                mode: ContinuousDelivery
-                label: ''
-                increment: Patch
-            fallback-tag: v0.0.1
 
-      - name: 初始化 Flutter 环境(FVM)
+      - name: 初始化 Flutter 环境
         uses: subosito/flutter-action@v2
         with:
           flutter-version-file: .fvmrc
           cache: true
 
-      - name: Flutter 预缓存Windows编译资源
-        run: flutter precache --windows
-
       - name: 初始化 Rust 工具链
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: 还原项目依赖
+      - name: 还原依赖
         run: flutter pub get --no-example --enforce-lockfile
 
       - name: 生成代码 (rhttp)
@@ -69,7 +51,7 @@ jobs:
       - name: 生成代码 (PixEz)
         run: dart run build_runner build
 
-      - name: 构建Windows Release安装包
+      - name: 构建项目
         shell: pwsh
         run: |-
           flutter build windows `
@@ -78,7 +60,7 @@ jobs:
             --build-name=${{ steps.gitversion.outputs.majorMinorPatch }} `
             --build-number=${{ steps.gitversion.outputs.buildMetaData }}
 
-      - name: 上传原始二进制产物
+      - name: 上传产物
         id: binary-artifact
         uses: actions/upload-artifact@v7
         with:
@@ -86,7 +68,7 @@ jobs:
           path: build/windows/x64/runner/Release/**/*
           compression-level: 9
 
-      - name: 还原签名证书
+      - name: 还原证书
         id: restore-cert
         shell: pwsh
         if: env.CERTIFICATE != '' && github.event_name != 'pull_request'
@@ -102,7 +84,7 @@ jobs:
           Write-Output "CERTIFICATE_PATH=$certFile" >> "$env:GITHUB_OUTPUT"
           Write-Output "CERTIFICATE_SUBJECT=$($Private:Certificate.Subject)" >> "$env:GITHUB_OUTPUT"
 
-      - name: 打包MSIX安装包
+      - name: 构建 MSIX
         id: msix
         shell: pwsh
         if: steps.restore-cert.conclusion == 'success'
@@ -119,7 +101,7 @@ jobs:
             -LiteralPath build/windows/x64/runner/Release/pixez.msix `
             -Destination build/windows/x64/runner/Release/windows-x86_64-release.msix
 
-      - name: 上传MSIX包
+      - name: 上传 MSIX
         id: msix-artifact
         if: steps.msix.conclusion == 'success'
         uses: actions/upload-artifact@v7
@@ -128,7 +110,7 @@ jobs:
           path: build/windows/x64/runner/Release/windows-x86_64-release.msix
           compression-level: 9
 
-      - name: 生成MSIX一键安装器exe
+      - name: 生成 MSIX 安装器
         id: installer
         if: steps.msix.conclusion == 'success'
         uses: frg2089/MsixInstaller@v2
@@ -136,7 +118,7 @@ jobs:
           msix: build/windows/x64/runner/Release/windows-x86_64-release.msix
           name: windows-x86_64-release.msix
 
-      - name: 上传MSIX安装器exe
+      - name: 上传 MSIX 安装器
         id: installer-artifact
         if: steps.installer.conclusion == 'success'
         uses: actions/upload-artifact@v7
@@ -145,29 +127,34 @@ jobs:
           path: ${{ steps.installer.outputs.path }}
           compression-level: 9
 
-      - name: 生成构建摘要与校验和
+      - name: 生成校验和
         shell: pwsh
         run: |-
           Write-Output '### Build Success :rocket:' >> $env:GITHUB_STEP_SUMMARY
+
           if ($env:CERTIFICATE_SUBJECT) {
-            Write-Output "Publisher: $env:CERTIFICATE_SUBJECT" >> $env:GITHUB_STEP_SUMMARY
+            Write-Output "Publisher: $env:CERTIFICATE_SUBJECT" >> $env:GITHUB_STEP_SUMMARY  
           }
+
           Write-Output '|File|SHA256|' >> $env:GITHUB_STEP_SUMMARY
           Write-Output '|:-|:-:|' >> $env:GITHUB_STEP_SUMMARY
           Write-Output "|[binary](${{ steps.binary-artifact.outputs.artifact-url }})|${{ steps.binary-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY
+
           if ('${{ steps.msix-artifact.conclusion }}' -eq 'success') {
-            Write-Output "|[msix](${{ steps.msix-artifact.outputs.artifact-url }})|${{ steps.msix-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY
+            Write-Output "|[msix](${{ steps.msix-artifact.outputs.artifact-url }})|${{ steps.msix-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY  
           }
+
           if ('${{ steps.installer-artifact.conclusion }}' -eq 'success') {
-            Write-Output "|[installer](${{ steps.installer-artifact.outputs.artifact-url }})|${{ steps.installer-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY
+            Write-Output "|[installer](${{ steps.installer-artifact.outputs.artifact-url }})|${{ steps.installer-artifact.outputs.artifact-digest }}|" >> $env:GITHUB_STEP_SUMMARY  
           }
+
           Write-Output '' >> $env:GITHUB_STEP_SUMMARY
           Write-Output '### MSIX 安装教程' >> $env:GITHUB_STEP_SUMMARY
-          Write-Output '' >> $env:GITHUB_STEP_SUMMARY
+          Write-Output '![image](https://github.com/Notsfsssf/pixez-flutter/assets/42184238/f1956682-f527-487d-997b-523319cd78d3)' >> $env:GITHUB_STEP_SUMMARY
 
   publish:
     needs: build
-    name: 发布Release
+    name: 发布
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
@@ -177,29 +164,29 @@ jobs:
       - name: 签出仓库
         uses: actions/checkout@v7
 
-      - name: 下载原始二进制产物
+      - name: Download Loose Artifact
         if: needs.build.outputs.msix-conclusion == 'success'
         uses: actions/download-artifact@v8
         with:
           name: windows-x86_64-release
           path: artifacts
           skip-decompress: true
-
-      - name: 下载MSIX包
+          
+      - name: Download a Msix Artifact
         if: needs.build.outputs.msix-conclusion == 'success'
         uses: actions/download-artifact@v8
         with:
           name: windows-x86_64-release.msix
           path: artifacts
 
-      - name: 下载MSIX一键安装器
+      - name: Download a Msix Installer Artifact
         if: needs.build.outputs.installer-conclusion == 'success'
         uses: actions/download-artifact@v8
         with:
           name: windows-x86_64-release.msix.exe
           path: artifacts
 
-      - name: 创建GitHub Release
+      - name: Release
         uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
