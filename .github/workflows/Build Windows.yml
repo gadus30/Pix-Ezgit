@@ -1,0 +1,41 @@
+name: PixEz Windows 打包
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出仓库源码
+        uses: actions/checkout@v4
+
+      - name: 配置Flutter稳定版
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 安装项目依赖
+        run: flutter pub get
+
+      - name: 编译Windows Release
+        run: flutter build windows --release
+
+      # 强制校验编译目录是否生成
+      - name: 校验编译产物
+        run: |
+          if (-not (Test-Path "build/windows/x64/release")) {
+            Write-Error "编译失败：未生成Windows输出目录，请检查源码是否完整PixEz项目"
+            exit 1
+          }
+
+      - name: 压缩程序包
+        run: Compress-Archive build/windows/x64/release PixEz_Windows.zip
+
+      - name: 上传压缩包
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixEz-Windows完整程序
+          path: PixEz_Windows.zip
