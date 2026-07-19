@@ -17,12 +17,8 @@ jobs:
           channel: stable
           cache: true
 
-      # 关键：强制指定VS路径，解决检测不到VS的报错
-      - name: 配置Visual Studio路径
-        run: flutter config --windows-vs-path "C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
-
       - name: 验证环境
-        run: flutter doctor
+        run: flutter doctor -v
 
       - name: 安装项目依赖
         run: flutter pub get
